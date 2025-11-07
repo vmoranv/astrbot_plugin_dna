@@ -84,9 +84,14 @@ class DnaInfoPlugin(Star):
         """Runs every hour to fetch and broadcast data."""
         while True:
             now = datetime.now()
-            next_hour = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
-            wait_seconds = (next_hour - now).total_seconds()
-            logger.info(f"下一次播报在 {next_hour}, 等待 {wait_seconds:.2f} 秒。")
+            # 为减轻上游压力，延迟一分钟进行查询
+            if now.minute < 1:
+                next_run_time = now.replace(minute=1, second=0, microsecond=0)
+            else:
+                next_run_time = (now + timedelta(hours=1)).replace(minute=1, second=0, microsecond=0)
+            
+            wait_seconds = (next_run_time - now).total_seconds()
+            logger.info(f"下一次播报在 {next_run_time}, 等待 {wait_seconds:.2f} 秒。")
             await asyncio.sleep(wait_seconds)
             
             await self.fetch_and_broadcast()
