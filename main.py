@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 import aiohttp
 
 from astrbot.api import logger
-from astrbot.api.event import filter, AstrMessageEvent
+from astrbot.api.event import filter, AstrMessageEvent, MessageChain
 from astrbot.api.star import Context, Star, StarTools
 import astrbot.api.message_components as Comp
 
@@ -117,7 +117,7 @@ class DnaInfoPlugin(Star):
             weapon = "、".join([inst["name"] for inst in instances_data[1].get("instances", [])])
             wedge = "、".join([inst["name"] for inst in instances_data[2].get("instances", [])])
 
-            message_text = f"当前DNA信息：\n角色：{role}\n武器：{weapon}\n魔之楔：{wedge}"
+            message_text = f"当前DNA信息：\n角  色：{role}\n武  器：{weapon}\n魔之楔：{wedge}"
             return [Comp.Plain(message_text)]
 
         except aiohttp.ClientError as e:
@@ -132,11 +132,12 @@ class DnaInfoPlugin(Star):
         """Fetches data from the API and broadcasts it to subscribers."""
         logger.info("开始获取DNA信息...")
         
-        message_chain = await self.get_dna_info_message()
-        if not message_chain:
+        message_components = await self.get_dna_info_message()
+        if not message_components:
             logger.warning("获取DNA信息失败，本轮不播报。")
             return
 
+        message_to_send = MessageChain(message_components)
         logger.info(f"获取到DNA信息，准备向 {len(self.subscriptions)} 个订阅者发送。")
         
         if not self.subscriptions:
@@ -145,7 +146,7 @@ class DnaInfoPlugin(Star):
 
         for umo in self.subscriptions:
             try:
-                await self.context.send_message(umo, message_chain)
+                await self.context.send_message(umo, message_to_send)
                 logger.debug(f"成功发送到 {umo}")
             except Exception as e:
                 logger.error(f"发送到 {umo} 失败: {e}")
