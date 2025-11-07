@@ -1,24 +1,153 @@
-from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
-from astrbot.api.star import Context, Star, register
-from astrbot.api import logger
+import asyncio
+import json
+from pathlib import Path
+from datetime import datetime, timedelta
+import aiohttp
 
-@register("helloworld", "YourName", "一个简单的 Hello World 插件", "1.0.0")
-class MyPlugin(Star):
+from astrbot.api import logger
+from astrbot.api.event import filter, AstrMessageEvent
+from astrbot.api.star import Context, Star, StarTools
+import astrbot.api.message_components as Comp
+
+# API URL and Headers
+API_URL = "https://wiki.ldmnq.com/v1/dna/instanceInfo"
+HEADERS = {"game-alias": "dna"}
+
+class DnaInfoPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
+        self.subscriptions = set()
+        self.scheduler_task = None
+        
+        data_dir = StarTools.get_data_dir("dna_info")
+        data_dir.mkdir(parents=True, exist_ok=True)
+        self.subs_file = data_dir / "subscriptions.json"
+        
+        self._load_subscriptions()
+
+    def _load_subscriptions(self):
+        """Load subscriptions from file."""
+        try:
+            if self.subs_file.exists():
+                with open(self.subs_file, "r", encoding="utf-8") as f:
+                    self.subscriptions = set(json.load(f))
+                logger.info(f"成功加载 {len(self.subscriptions)} 个订阅。")
+            else:
+                logger.info("订阅文件不存在，将在首次订阅时创建。")
+        except Exception as e:
+            logger.error(f"加载订阅失败: {e}")
+
+    def _save_subscriptions(self):
+        """Save subscriptions to file."""
+        try:
+            with open(self.subs_file, "w", encoding="utf-8") as f:
+                json.dump(list(self.subscriptions), f, ensure_ascii=False, indent=4)
+        except Exception as e:
+            logger.error(f"保存订阅失败: {e}")
 
     async def initialize(self):
-        """可选择实现异步的插件初始化方法，当实例化该插件类之后会自动调用该方法。"""
-
-    # 注册指令的装饰器。指令名为 helloworld。注册成功后，发送 `/helloworld` 就会触发这个指令，并回复 `你好, {user_name}!`
-    @filter.command("helloworld")
-    async def helloworld(self, event: AstrMessageEvent):
-        """这是一个 hello world 指令""" # 这是 handler 的描述，将会被解析方便用户了解插件内容。建议填写。
-        user_name = event.get_sender_name()
-        message_str = event.message_str # 用户发的纯文本消息字符串
-        message_chain = event.get_messages() # 用户所发的消息的消息链 # from astrbot.api.message_components import *
-        logger.info(message_chain)
-        yield event.plain_result(f"Hello, {user_name}, 你发了 {message_str}!") # 发送一条纯文本消息
+        """Start the background scheduler task."""
+        self.scheduler_task = asyncio.create_task(self.scheduler())
+        logger.info("DNA信息播报插件已启动定时任务。")
 
     async def terminate(self):
-        """可选择实现异步的插件销毁方法，当插件被卸载/停用时会调用。"""
+        """Stop the background scheduler task."""
+        if self.scheduler_task:
+            self.scheduler_task.cancel()
+        self._save_subscriptions()
+        logger.info("DNA信息播报插件已停止。")
+
+    @filter.command("dna_sub", alias={"dna订阅"})
+    async def handle_subscription(self, event: AstrMessageEvent):
+        """订阅或取消订阅DNA信息播报。"""
+        umo = event.unified_msg_origin
+        if umo in self.subscriptions:
+            self.subscriptions.remove(umo)
+            self._save_subscriptions()
+            yield event.plain_result("已取消订阅每小时二重螺旋信息播报。")
+        else:
+            self.subscriptions.add(umo)
+            self._save_subscriptions()
+            yield event.plain_result("已成功订阅每小时二重螺旋信息播报！将在下一个整点为您播报。")
+
+    @filter.command("测试密函状态")
+    async def manual_fetch(self, event: AstrMessageEvent):
+        """手动触发一次DNA信息查询并发送给当前用户。"""
+        logger.info(f"用户 {event.get_sender_name()} 手动触发查询。")
+        message_chain = await self.get_dna_info_message()
+        if message_chain:
+            yield event.chain_result(message_chain)
+        else:
+            yield event.plain_result("获取DNA信息失败，请检查后台日志。")
+
+    async def scheduler(self):
+        """Runs every hour to fetch and broadcast data."""
+        while True:
+            now = datetime.now()
+            next_hour = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+            wait_seconds = (next_hour - now).total_seconds()
+            logger.info(f"下一次播报在 {next_hour}, 等待 {wait_seconds:.2f} 秒。")
+            await asyncio.sleep(wait_seconds)
+            
+            await self.fetch_and_broadcast()
+            
+            # Additional small sleep to prevent multiple runs in the same second
+            await asyncio.sleep(1)
+
+    async def get_dna_info_message(self):
+        """获取并格式化DNA信息，返回消息链。"""
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(API_URL, headers=HEADERS) as response:
+                    if response.status != 200:
+                        logger.error(f"请求API失败，状态码: {response.status}")
+                        return None
+                    data = await response.json()
+
+            if data.get("code") != 0:
+                logger.error(f"API返回错误: {data.get('msg')}")
+                return None
+
+            instances_data = data.get("data", [])
+            if len(instances_data) < 3:
+                logger.error("API返回的数据格式不正确，缺少instances。")
+                return None
+
+            role = "、".join([inst["name"] for inst in instances_data[0].get("instances", [])])
+            weapon = "、".join([inst["name"] for inst in instances_data[1].get("instances", [])])
+            wedge = "、".join([inst["name"] for inst in instances_data[2].get("instances", [])])
+
+            message_text = f"当前DNA信息：\n角色：{role}\n武器：{weapon}\n魔之楔：{wedge}"
+            return [Comp.Plain(message_text)]
+
+        except aiohttp.ClientError as e:
+            logger.error(f"网络请求错误: {e}")
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON解析错误: {e}")
+        except Exception as e:
+            logger.error(f"处理DNA信息时发生未知错误: {e}", exc_info=True)
+        return None
+
+    async def fetch_and_broadcast(self):
+        """Fetches data from the API and broadcasts it to subscribers."""
+        logger.info("开始获取DNA信息...")
+        
+        message_chain = await self.get_dna_info_message()
+        if not message_chain:
+            logger.warning("获取DNA信息失败，本轮不播报。")
+            return
+
+        logger.info(f"获取到DNA信息，准备向 {len(self.subscriptions)} 个订阅者发送。")
+        
+        if not self.subscriptions:
+            logger.info("没有订阅者，取消发送。")
+            return
+
+        for umo in self.subscriptions:
+            try:
+                await self.context.send_message(umo, message_chain)
+                logger.debug(f"成功发送到 {umo}")
+            except Exception as e:
+                logger.error(f"发送到 {umo} 失败: {e}")
+        
+        logger.info("本轮播报完成。")

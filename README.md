@@ -1,9 +1,25 @@
-# helloworld
+# 二重螺旋信息播报插件
 
-AstrBot 插件模板
+一个为 AstrBot 开发的插件，用于播报二重螺旋的密函信息。
 
-A template plugin for AstrBot plugin feature
+## 功能
 
-# 支持
+*   **定时播报**: 订阅后，每小时自动播报最新的 DNA 信息（角色、武器、魔之楔）。
+*   **指令订阅**: 使用 `/dna_sub` 或 `/dna订阅` 指令来开启或关闭播报订阅。
+*   **手动查询**: 使用 `/测试密函状态` 指令立即获取并显示当前的 DNA 信息。
+*   **数据持久化**: 订阅状态会自动保存在本地，AstrBot 重启后依然有效。
 
-[帮助文档](https://astrbot.app)
+## 指令
+
+*   `/dna_sub` (或 `/dna订阅`): 订阅或取消订阅每小时的 DNA 信息播报。
+*   `/测试密函状态`: 手动触发一次 DNA 信息查询。
+
+## 安装与使用
+
+1.  将插件放置于 AstrBot 的 `data/plugins` 目录下。
+2.  重启 AstrBot。
+3.  在需要播报的聊天中（私聊或群聊）发送 `/dna_sub` 即可开始订阅。
+
+## 数据来源
+
+数据来源于 [ldmnq.com](https://wiki.ldmnq.com/v1/dna/instanceInfo)。
